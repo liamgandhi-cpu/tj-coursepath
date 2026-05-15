@@ -1,14 +1,13 @@
-const { login } = require("studentvue");
 const axios = require("axios");
-const { XMLParser } = require("fast-xml-parser");
 
-const FCPS_URL = "https://sisstudent.fcps.edu/";
-const FCPS_SOAP = "https://sisstudent.fcps.edu/Service/PXPCommunication.asmx";
+const ENDPOINT   = "https://sisstudent.fcps.edu/SVUE/Service/PXPCommunication.asmx";
+const SOAP_ACTION = "http://edupoint.com/webservices/ProcessWebServiceRequest";
 
-// Makes a raw SOAP request to StudentVue for methods not in the npm package (e.g. StudentCourseHistory)
-async function rawRequest(username, password, methodName, paramStr) {
+async function soapCall(username, password, methodName) {
   const body = `<?xml version="1.0" encoding="utf-8"?>
-<soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
+<soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+               xmlns:xsd="http://www.w3.org/2001/XMLSchema"
+               xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
   <soap:Body>
     <ProcessWebServiceRequest xmlns="http://edupoint.com/webservices/">
       <userID>${username}</userID>
@@ -17,29 +16,29 @@ async function rawRequest(username, password, methodName, paramStr) {
       <parent>0</parent>
       <webServiceHandleName>PXPWebServices</webServiceHandleName>
       <methodName>${methodName}</methodName>
-      <paramStr>${paramStr || "&lt;Parms&gt;&lt;childIntId&gt;0&lt;/childIntId&gt;&lt;/Parms&gt;"}</paramStr>
+      <paramStr>&lt;Parms&gt;&lt;childIntId&gt;0&lt;/childIntId&gt;&lt;/Parms&gt;</paramStr>
     </ProcessWebServiceRequest>
   </soap:Body>
 </soap:Envelope>`;
 
-  const resp = await axios.post(FCPS_SOAP, body, {
-    headers: {
-      "Content-Type": "text/xml; charset=utf-8",
-      "SOAPAction": "http://edupoint.com/webservices/ProcessWebServiceRequest",
-    },
-    timeout: 30000,
+  const resp = await axios.post(ENDPOINT, body, {
+    headers: { "Content-Type": "text/xml; charset=utf-8", "SOAPAction": SOAP_ACTION },
+    timeout: 25000,
   });
 
-  const outer = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: "@_" });
-  const outerParsed = outer.parse(resp.data);
-  const innerXml =
-    outerParsed?.["soap:Envelope"]?.["soap:Body"]
-      ?.ProcessWebServiceRequestResponse
-      ?.ProcessWebServiceRequestResult;
-  if (!innerXml) throw new Error("Empty SOAP response");
+  // Pull the inner XML string out of the SOAP envelope with regex (avoids XML parser entity limits)
+  const match = resp.data.match(/<ProcessWebServiceRequestResult>([\s\S]*?)<\/ProcessWebServiceRequestResult>/);
+  if (!match) throw new Error("Empty SOAP response");
 
-  const inner = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: "@_", isArray: () => false });
-  return inner.parse(innerXml);
+  // Unescape the inner XML
+  return match[1]
+    .replace(/&lt;/g, "<").replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&").replace(/&quot;/g, '"');
+}
+
+function attr(xml, name) {
+  const m = xml.match(new RegExp(`<${name}>([^<]+)</${name}>`));
+  return m ? m[1].trim() : null;
 }
 
 module.exports = async (req, res) => {
@@ -47,64 +46,51 @@ module.exports = async (req, res) => {
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
   if (req.method === "OPTIONS") return res.status(200).end();
-  if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
+  if (req.method !== "POST")    return res.status(405).json({ error: "Method not allowed" });
 
   const { username, password } = req.body || {};
   if (!username || !password) return res.status(400).json({ error: "Missing credentials" });
 
-  const cleanUser = username.includes("@") ? username.split("@")[0] : username;
+  const user = username.includes("@") ? username.split("@")[0] : username;
 
   try {
-    // Authenticate via the studentvue package
-    const client = await login(FCPS_URL, { username: cleanUser, password });
+    // ── 1. Student info — validates credentials and gets grade ─────────────────
+    const infoXml = await soapCall(user, password, "StudentInfo");
+    if (infoXml.includes("RT_ERROR")) throw new Error("Invalid username or password");
 
-    // Current-year courses from gradebook
-    let schedule = [];
+    const grade = attr(infoXml, "Grade") || "9";
+    const gradeNum = parseInt(grade) || 9;
+    const name = attr(infoXml, "FormattedName") || user;
+
+    // ── 2. Current courses from Gradebook ─────────────────────────────────────
+    const transcript = [];
     try {
-      const gradebook = await client.gradebook();
-      schedule = (gradebook.courses || []).map(c => ({
-        name: c.title,
-        code: "",
-        mark: c.marks?.[0]?.calculatedScore?.string || "",
-      }));
+      const gbXml = await soapCall(user, password, "Gradebook");
+
+      // Title attribute looks like: Title="AP Precalculus BC 2 TJ (3160TM)"
+      // or just: Title="English 9 HN (113036)"
+      for (const m of gbXml.matchAll(/Title="([^"]+)"/g)) {
+        const raw = m[1].replace(/&amp;/g, "&");
+        // Try to split name and code: "Course Name (CODE)"
+        const codeMatch = raw.match(/^(.+?)\s+\(([A-Z0-9]{4,8})\)\s*$/);
+        if (codeMatch) {
+          transcript.push({ name: codeMatch[1].trim(), code: codeMatch[2], mark: "", credits: "", grade: gradeNum });
+        } else {
+          transcript.push({ name: raw, code: "", mark: "", credits: "", grade: gradeNum });
+        }
+      }
+      console.log(`Gradebook: ${transcript.length} courses for grade ${gradeNum}`);
     } catch (e) {
       console.log("Gradebook failed:", e.message);
     }
 
-    // Course history via raw SOAP (not exposed by the npm package)
-    let transcript = [];
-    let maxGrade = 9;
-    try {
-      const data = await rawRequest(cleanUser, password, "StudentCourseHistory");
-      const root = data?.StudentCourseHistory;
-      let groups = root?.CourseHistoryGroup ?? [];
-      if (!Array.isArray(groups)) groups = [groups];
-
-      for (const group of groups) {
-        const gradeNum = parseInt(group?.["@_Grade"] ?? "9");
-        if (gradeNum > maxGrade) maxGrade = gradeNum;
-        let courses = group?.CourseHistory ?? [];
-        if (!Array.isArray(courses)) courses = [courses];
-
-        for (const c of courses) {
-          const name = c?.["@_CourseTitle"] || c?.["@_Title"] || "";
-          const code = c?.["@_CourseID"] || c?.["@_ID"] || "";
-          const mark = c?.["@_Mark"] || "";
-          const credits = c?.["@_Credit"] || c?.["@_Credits"] || "";
-          if (name) transcript.push({ name, code, mark, credits, grade: gradeNum });
-        }
-      }
-      console.log(`Parsed ${transcript.length} transcript courses`);
-    } catch (e) {
-      console.log("Course history failed:", e.message);
-    }
-
     return res.json({
       success: true,
-      student: { name: cleanUser, grade: String(maxGrade), school: "TJHSST", id: cleanUser },
-      schedule,
+      student: { name, grade: String(gradeNum), school: "TJHSST", id: user },
+      schedule: [],   // frontend only uses transcript for matching
       transcript,
     });
+
   } catch (err) {
     console.error("StudentVue error:", err.message);
     const isCredErr = /invalid|password|credential|unauthorized/i.test(err.message);
