@@ -169,7 +169,7 @@ const TJ_COURSES = [
   { course_code:"3160TK", course_name:"AP Precalculus AB 2", subject_area:"Math", level_tags:["AP","TJ"], min_grade:11, max_grade:11, prerequisites:["316005"], requirement_bucket:"Math Core", duration:"year" },
   { course_code:"316056", course_name:"Intro to Calculus TJ HN", subject_area:"Math", level_tags:["HN","TJ"], min_grade:11, max_grade:12, prerequisites:["316005"], requirement_bucket:"Math Core", duration:"year" },
   { course_code:"317004", course_name:"AP Calculus AB", subject_area:"Math", level_tags:["AP"], min_grade:10, max_grade:12, prerequisites:["316005"], requirement_bucket:"Math Core", duration:"year" },
-  { course_code:"317704", course_name:"AP Calculus BC", subject_area:"Math", level_tags:["AP"], min_grade:10, max_grade:12, prerequisites:["3160TN"], requirement_bucket:"Math Core", duration:"year", notes:"Preferred for CS/Engineering tracks" },
+  { course_code:"317704", course_name:"AP Calculus BC", subject_area:"Math", level_tags:["AP"], min_grade:10, max_grade:12, prerequisites:["3160TL"], requirement_bucket:"Math Core", duration:"year", notes:"Preferred for CS/Engineering tracks" },
   // Math Electives (4th year satisfiers after Calc AB or BC)
   { course_code:"317707", course_name:"AP Calculus BC Post-AB", subject_area:"Math", level_tags:["AP"], min_grade:11, max_grade:12, prerequisites:["317004"], requirement_bucket:"Math Elective", duration:"year", notes:"4th year math satisfier*" },
   { course_code:"3178DE", course_name:"Multivariable Calculus DE (Paired with Linear)", subject_area:"Math", level_tags:["DE"], min_grade:11, max_grade:12, prerequisites:["317704"], requirement_bucket:"Math Elective", duration:"year", semester_pair:"3198DE", notes:"4th year math satisfier*" },
@@ -318,9 +318,9 @@ const MATH_PREREQ_MAP = {
   "314336":{ name:"Geometry HN", prereqs:[], level:1 },
   "3135TM":{ name:"Algebra 2 HN", prereqs:["314336"], level:2 },
   "316005":{ name:"AP Precalculus AB", prereqs:["3135TM"], level:3 },
-  "3160TN":{ name:"AP Precalculus BC", prereqs:["3135TM"], level:3.5 },
+  "3160TL":{ name:"AP Precalculus BC", prereqs:["3135TM"], level:3.5 },
   "317004":{ name:"AP Calculus AB", prereqs:["316005"], level:4 },
-  "317704":{ name:"AP Calculus BC", prereqs:["3160TN"], level:5 },
+  "317704":{ name:"AP Calculus BC", prereqs:["3160TL"], level:5 },
   "317707":{ name:"AP Calculus BC Post-AB", prereqs:["317004"], level:5 },
   "3178DT":{ name:"Multivariable Calculus DE", prereqs:["317704"], level:6 },
   "3198DT":{ name:"Linear Algebra DE", prereqs:["317704"], level:6 },
@@ -330,12 +330,12 @@ const MATH_PREREQ_MAP = {
 
 function getMathLevel(input="") {
   const s = input.toLowerCase();
-  if (s.includes("calc bc")) return 5;
-  if (s.includes("calc ab")) return 4;
-  if (s.includes("precalc bc")) return 3.5;
-  if (s.includes("precalc")) return 3;
-  if (s.includes("algebra 2")) return 2;
-  if (s.includes("geometry")) return 1;
+  if (s.includes("precalc bc") || s.includes("precalculus bc")) return 3.5;
+  if (s.includes("precalc") || s.includes("precalculus")) return 3;
+  if (s.includes("calc bc") || s.includes("calculus bc")) return 5;
+  if (s.includes("calc ab") || s.includes("calculus ab")) return 4;
+  if (s.includes("algebra 2") || s.includes("algebra ii") || s.includes("alg 2")) return 2;
+  if (s.includes("geometry") || s.includes("geom")) return 1;
   return 1;
 }
 
@@ -355,7 +355,12 @@ function getNextMathCourse(currentMathCode, completedMathCourses=[], rigor) {
   const eligible = Object.entries(MATH_PREREQ_MAP).filter(([code, info]) => {
     if (info.level <= currentLevel) return false;
     if (info.prereqs.length === 0) return true;
-    return info.prereqs.some(p => completedMathCourses.includes(p) || currentCode === p);
+    if (info.prereqs.some(p => completedMathCourses.includes(p) || currentCode === p)) return true;
+    // When level is text-derived (no course code), allow if all prereqs are at or below current level
+    if (!currentCode && currentLevel > 0) {
+      return info.prereqs.every(p => MATH_PREREQ_MAP[p]?.level <= currentLevel);
+    }
+    return false;
   }).map(([code, info]) => ({ code, ...info }));
   if (!eligible.length) return null;
   eligible.sort((a,b) => a.level - b.level);
@@ -412,7 +417,14 @@ function getEnglishCourse(grade, rigor) {
   return courses.find(c => c.level_tags.includes("HN")) || courses[0];
 }
 
-function getSocialStudiesCourse(grade, rigor) {
+function getSocialStudiesCourse(grade, rigor, interests=[]) {
+  if (grade===9) {
+    // World History I satisfier — only recommended when no world language fills the 7th slot
+    if (rigor==="aggressive") return getCourseByCode("221204"); // AP Human Geography
+    const stemInterested = interests.some(i=>i.includes("Research")||i.includes("CS")||i.includes("Engineering")||i.includes("Biology"));
+    return stemInterested ? getCourseByCode("2996T1") // History of Science TJ HN
+                          : getCourseByCode("2219T1"); // Ancient & Classical Civilizations TJ HN
+  }
   if (grade===10) return rigor==="aggressive" ? getCourseByCode("234004") : getCourseByCode("222136");
   if (grade===11) return rigor==="aggressive" ? getCourseByCode("231904") : getCourseByCode("236036");
   if (grade===12) return rigor==="aggressive" ? getCourseByCode("244504") : getCourseByCode("244036");
@@ -463,7 +475,7 @@ function generateSchedule(inputs) {
   if (sci) schedule.push({ ...sci, reason:`Science progression for grade ${nextGrade}` });
 
   if (nextGrade >= 10) {
-    const ss = getSocialStudiesCourse(nextGrade, rigor_preference);
+    const ss = getSocialStudiesCourse(nextGrade, rigor_preference, interests);
     if (ss) schedule.push({ ...ss, reason:`Required social studies for grade ${nextGrade}` });
   }
 
@@ -480,6 +492,12 @@ function generateSchedule(inputs) {
     const lang = getNextLanguageCourse(world_language, world_language_level||0);
     if (lang) schedule.push({ ...lang, reason:`Continuing ${world_language} level ${(world_language_level||0)+1}` });
     else warnings.push(`Could not find next ${world_language} level`);
+  }
+
+  // For freshmen without a world language, fill the open slot with a World History I satisfier
+  if (nextGrade===9 && !world_language && schedule.length < 7) {
+    const ss = getSocialStudiesCourse(9, rigor_preference, interests);
+    if (ss) schedule.push({ ...ss, reason:"Recommended: World History I elective (satisfies future graduation requirement)" });
   }
 
   if (schedule.length < 7) {
@@ -555,7 +573,7 @@ function CompletedCoursesInput({ currentGrade, completedByGrade, onChange }) {
   if (!currentGrade) return null;
   const cur = parseInt(currentGrade);
   const grades = [];
-  grades.push({ grade:8, label:"Middle School (Optional)" });
+  grades.push({ grade:8, label:"Middle School – Math & Language Credits (Optional)" });
   for (let x=9; x<cur; x++) grades.push({ grade:x, label:`${x}th Grade Completed` });
   if (cur>=9&&cur<=11) grades.push({ grade:cur, label:`${cur}th Grade (In Progress)` });
 
@@ -576,7 +594,9 @@ function CompletedCoursesInput({ currentGrade, completedByGrade, onChange }) {
           const sel = completedByGrade[grade]||[];
           const q = (search[grade]||"").toLowerCase();
           const list = TJ_COURSES
-            .filter(c => grade===8 ? true : grade===9 ? true : (c.min_grade<=grade&&c.max_grade>=grade))
+            .filter(c => grade===8
+              ? (c.subject_area==="Math" || c.subject_area==="World Language")
+              : grade===9 ? true : (c.min_grade<=grade&&c.max_grade>=grade))
             .filter(c => !c.requirement_bucket?.includes("Research"))
             .filter(c => !q || c.course_name.toLowerCase().includes(q) || c.subject_area.toLowerCase().includes(q));
           return (
@@ -1115,9 +1135,48 @@ function StudentPlanner({ onSave, user, savedProfile, onSaveProfile, onSignInPro
     setChatLoading(true);
     try {
       const scheduleContext = (editedSchedule||[]).map((c,i)=>`${i+1}. ${c.course_name} (${c.subject_area}${c.level_tags?.length?" - "+c.level_tags.join("/"):""})${c.reason?" — "+c.reason:""}`).join("\n");
-      const systemPrompt = `You are an AI academic advisor for Thomas Jefferson High School for Science & Technology (TJHSST). You are helping a student in grade ${form.current_grade} plan their courses for grade ${nextGrade}.
+      const isFreshman = nextGrade === 9;
+      const freshmanContext = isFreshman ? `
+FRESHMAN-SPECIFIC REQUIREMENTS (Grade 9):
+All TJ freshmen are REQUIRED to take — these CANNOT be removed:
+- Foundations of Computer Science TJ HN (year-long, required of every TJ student)
+- Design & Technology (year-long, required of every TJ student)
+- Health & PE 9 (year-long, required)
+- Biology 1 HN (starts the required Bio → Chem → Physics → 4th year science sequence)
+- English 9 HN (required; there is no AP English for 9th grade at TJ)
 
-The student's current Grade ${nextGrade} schedule is:
+TYPICAL TJ FRESHMAN MATH PLACEMENT:
+- Most TJ freshmen enter having completed Geometry in middle school → start at Algebra 2 HN
+- Advanced track freshmen who completed Algebra 2 in middle school → start at AP Precalculus (AB or BC)
+- Very advanced freshmen may start at AP Calculus AB or higher
+- TJ does NOT offer standard/non-honors sections; all math is Honors, AP, or DE
+
+STANDARD FRESHMAN SCHEDULE (7 courses total):
+1. English 9 HN (required — only English option for 9th grade)
+2. Math (Algebra 2 HN for most; AP Precalculus for advanced)
+3. Biology 1 HN (required first-year science)
+4. Foundations of Computer Science TJ HN (required)
+5. Design & Technology (required)
+6. Health & PE 9 (required)
+7. World Language (continuing from middle school) — OR a World History I elective if no language
+
+SOCIAL STUDIES FOR 9TH GRADE (optional — only if no world language fills slot 7):
+TJ freshmen are NOT required to take social studies in 9th grade (it starts in 10th with World History II).
+However, students without a world language can fulfill a "World History I" credit with:
+- AP Human Geography (221204) — for aggressive/AP-track students
+- History of Science TJ HN (2996T1) — great for STEM-oriented freshmen
+- Psychology: Brain & Behavior TJ HN (2900T1) — popular choice
+- Law and Society TJ HN (2420T1), Ancient & Classical Civilizations TJ HN (2219T1), etc.
+
+SOCIAL STUDIES SEQUENCE (grades 10–12, all required):
+- 10th: World History & Geography 2 HN or AP World History
+- 11th: US/VA History HN or AP US History (often paired with AP English Language)
+- 12th: US/VA Government HN or AP US Government (often paired with AP English Literature)
+` : "";
+
+      const systemPrompt = `You are an AI academic advisor for Thomas Jefferson High School for Science & Technology (TJHSST). You are helping a student currently in grade ${form.current_grade} plan their courses for grade ${nextGrade}.
+
+The student's proposed Grade ${nextGrade} schedule is:
 ${scheduleContext}
 
 Student info:
@@ -1127,7 +1186,16 @@ Student info:
 - World language: ${form.world_language||"None"}
 - Research pathway: ${form.research_pathway||"Undecided"}
 
-You can answer questions about courses, prerequisites, explain why courses were chosen, and make changes to the schedule when asked.
+TJ-SPECIFIC CONTEXT:
+- TJ students take exactly 7 courses per year (a few opt into an 8th course online)
+- ALL students take math and science all 4 years; English all 4 years
+- Science sequence (required): Biology 1 HN → Chemistry 1 HN → Physics 1 HN → 4th year science
+- Math sequence typical: Algebra 2 HN → AP Precalculus → AP Calculus AB or BC → post-calc math
+- World language: strongly recommended all 4 years for college admissions; counted toward the 7 slots
+- Senior Research (grade 12): specialized TJ lab/project courses in CS, bio, chem, physics, engineering, etc.
+- Semester pairs: some courses are offered as two linked semester courses (e.g., AP World History paired with AP Seminar, AP Eng Lang paired with APUSH, AP Eng Lit paired with AP Gov)
+${freshmanContext}
+You can answer questions about courses, prerequisites, explain why courses were chosen, and suggest changes. For questions about REMOVING required freshman courses (Foundations of CS, Design & Technology, Health & PE 9, Biology 1 HN, English 9 HN), explain that these cannot be changed.
 
 When the user asks to change the schedule, append this EXACTLY at the end of your response (no extra text after it):
 SCHEDULE_CHANGE: [{"action":"replace","old":"EXACT CURRENT COURSE NAME","new":"EXACT NEW COURSE NAME"}]
@@ -1264,6 +1332,25 @@ Only include SCHEDULE_CHANGE if the user explicitly asked to modify the schedule
             </label>
           </div>
         </div>
+
+        {form.current_grade === "8" && (
+          <div style={{ padding:"14px", borderRadius:10, border:`1px solid ${C.accent}`, backgroundColor:"#F0FDFB" }}>
+            <label style={{ ...lbl, marginBottom:6 }}>Entering Math Placement
+              <span style={{ fontWeight:400, color:C.textSecondary, marginLeft:6, fontSize:12 }}>(most critical input for freshmen)</span>
+            </label>
+            <select style={inp} value={form.current_math_level} onChange={e=>set("current_math_level",e.target.value)}>
+              <option value="">Select your current math level...</option>
+              <option value="314336">Completed Geometry → starts at Algebra 2 HN at TJ</option>
+              <option value="3135TM">Completed Algebra 2 → starts at AP Precalculus at TJ (most common)</option>
+              <option value="316005">Completed Precalculus → starts at AP Calculus AB at TJ</option>
+              <option value="3160TL">Completed AP Precalculus BC → starts at AP Calculus BC at TJ</option>
+              <option value="317004">Completed Calculus AB → starts at post-calc math at TJ</option>
+            </select>
+            <p style={{ fontSize:11, color:C.textSecondary, margin:"6px 0 0" }}>
+              Not sure? Check your FCPS transcript or ask your 8th grade math teacher. Most TJ freshmen enter at Algebra 2.
+            </p>
+          </div>
+        )}
 
         <CompletedCoursesInput currentGrade={form.current_grade} completedByGrade={form.completed_courses_by_grade} onChange={v=>set("completed_courses_by_grade",v)} />
 
