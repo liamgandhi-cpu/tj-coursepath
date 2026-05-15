@@ -951,7 +951,7 @@ function StudentPlanner({ onSave, user, savedProfile, onSaveProfile, onSignInPro
       setForm(p => ({
         ...p,
         student_name: savedProfile.student_name || p.student_name,
-        current_grade: savedProfile.current_grade || p.current_grade,
+        current_grade: savedProfile.current_grade ? String(savedProfile.current_grade) : p.current_grade,
         gpa: savedProfile.gpa || p.gpa,
         interests: savedProfile.interests || p.interests,
         rigor_preference: savedProfile.rigor_preference || p.rigor_preference,
@@ -1275,7 +1275,7 @@ Only include SCHEDULE_CHANGE if the user explicitly asked to modify the schedule
         <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:16 }}>
           <div>
             <label style={lbl}>Current Grade *</label>
-            <select style={inp} value={form.current_grade} onChange={e=>set("current_grade",e.target.value)}>
+            <select style={inp} value={form.current_grade} onChange={e=>{ set("current_grade",e.target.value); setError(null); }}>
               <option value="">Select grade</option>
               <option value="8">8th (rising 9th)</option>
               <option value="9">9th (rising 10th)</option>
