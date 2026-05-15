@@ -308,6 +308,19 @@ const getCoursesForGrade = (grade) => TJ_COURSES.filter(c => c.min_grade <= grad
 
 const INTEREST_OPTIONS = ["CS / Programming","Engineering / Robotics","Research / Lab Science","Humanities / History","Biology / Chemistry / Physics","Business / Economics","Arts / Music / Theatre","Undecided"];
 const WORLD_LANGUAGES = ["French","German","Latin","Spanish","Chinese","Korean","Arabic","Japanese","Russian"];
+const VVA_SUMMER_LANGUAGES = [
+  { value:"Spanish I",   lang:"Spanish", level:1 },
+  { value:"Spanish II",  lang:"Spanish", level:2 },
+  { value:"Spanish III", lang:"Spanish", level:3 },
+  { value:"Spanish IV",  lang:"Spanish", level:4 },
+  { value:"French I",    lang:"French",  level:1 },
+  { value:"French II",   lang:"French",  level:2 },
+  { value:"French III",  lang:"French",  level:3 },
+  { value:"German I",    lang:"German",  level:1 },
+  { value:"German II",   lang:"German",  level:2 },
+  { value:"German III",  lang:"German",  level:3 },
+  { value:"Latin III",   lang:"Latin",   level:3 },
+];
 const RESEARCH_PATHWAYS = [
   "Computer Science / AI / Systems","Biology / Biotechnology / Neuroscience",
   "Chemistry / Materials Science","Physics / Engineering","Math / Data Science",
@@ -459,10 +472,15 @@ function selectElectives(grade, interests, rigor, current, count, researchPathwa
 function generateSchedule(inputs) {
   const { current_grade, interests, rigor_preference, current_math_level, current_science_level,
     world_language, world_language_level, research_pathway, completed_math_courses=[],
-    completed_courses=[] } = inputs;
+    completed_courses=[], summer_pe=false, summer_language="" } = inputs;
   const nextGrade = current_grade + 1;
   const warnings = [], schedule = [];
   if (nextGrade > 12) return { schedule:[], warnings:["Cannot generate post-graduation schedule"] };
+
+  // If a VVA summer language is planned, treat it as already completed when building TJ schedule
+  const vvaLang = VVA_SUMMER_LANGUAGES.find(c => c.value === summer_language);
+  const effectiveLang = vvaLang ? vvaLang.lang : (world_language || null);
+  const effectiveLangLevel = vvaLang ? vvaLang.level : (world_language_level || 0);
 
   const eng = getEnglishCourse(nextGrade, rigor_preference);
   if (eng) schedule.push({ ...eng, reason:`Required English for grade ${nextGrade}` });
@@ -482,20 +500,32 @@ function generateSchedule(inputs) {
   if (nextGrade===9) {
     const cs = getCourseByCode("3184T1"); if(cs) schedule.push({...cs,reason:"TJ required for freshmen"});
     const te = getCourseByCode("8403TJ"); if(te) schedule.push({...te,reason:"TJ required for freshmen"});
-    const pe = getCourseByCode("730000"); if(pe) schedule.push({...pe,reason:"Required: Health & PE 9"});
+    if (!summer_pe) {
+      const pe = getCourseByCode("730000"); if(pe) schedule.push({...pe,reason:"Required: Health & PE 9"});
+    } else {
+      warnings.push("Health & PE 9 will be completed over summer via Virtual Virginia — extra TJ slot available for an elective.");
+    }
   } else if (nextGrade===10) {
     const cs = getCourseByCode("318561"); if(cs) schedule.push({...cs,reason:"TJ required for sophomores"});
-    const pe = getCourseByCode("740500"); if(pe) schedule.push({...pe,reason:"Required: Health & PE 10"});
+    if (!summer_pe) {
+      const pe = getCourseByCode("740500"); if(pe) schedule.push({...pe,reason:"Required: Health & PE 10"});
+    } else {
+      warnings.push("Health & PE 10 will be completed over summer via Virtual Virginia — extra TJ slot available for an elective.");
+    }
   }
 
-  if (world_language) {
-    const lang = getNextLanguageCourse(world_language, world_language_level||0);
-    if (lang) schedule.push({ ...lang, reason:`Continuing ${world_language} level ${(world_language_level||0)+1}` });
-    else warnings.push(`Could not find next ${world_language} level`);
+  if (effectiveLang) {
+    const lang = getNextLanguageCourse(effectiveLang, effectiveLangLevel);
+    if (lang) {
+      const reason = vvaLang
+        ? `Starting ${effectiveLang} ${effectiveLangLevel+1} at TJ (completed ${vvaLang.value} via VVA over summer)`
+        : `Continuing ${effectiveLang} level ${effectiveLangLevel+1}`;
+      schedule.push({ ...lang, reason });
+    } else warnings.push(`Could not find next ${effectiveLang} level`);
   }
 
-  // For freshmen without a world language, fill the open slot with a World History I satisfier
-  if (nextGrade===9 && !world_language && schedule.length < 7) {
+  // For freshmen without a world language (and not taking one via VVA), fill the open slot
+  if (nextGrade===9 && !effectiveLang && schedule.length < 7) {
     const ss = getSocialStudiesCourse(9, rigor_preference, interests);
     if (ss) schedule.push({ ...ss, reason:"Recommended: World History I elective (satisfies future graduation requirement)" });
   }
@@ -925,7 +955,7 @@ function AdminDashboard({ submissions }) {
 function StudentPlanner({ onSave, user, savedProfile, onSaveProfile, onSignInPrompt }) {
   const [form, setForm] = useState({
     student_name:"", current_grade:"", gpa:"", interests:[], rigor_preference:"",
-    research_pathway:"", willing_summer_courses:false, willing_8th_course:false,
+    research_pathway:"", summer_pe:false, summer_language:"", willing_8th_course:false,
     current_math_level:"", completed_courses_by_grade:{},
     current_science_level:"", world_language:"", world_language_level:"", counselor_notes:""
   });
@@ -956,7 +986,8 @@ function StudentPlanner({ onSave, user, savedProfile, onSaveProfile, onSignInPro
         interests: savedProfile.interests || p.interests,
         rigor_preference: savedProfile.rigor_preference || p.rigor_preference,
         research_pathway: savedProfile.research_pathway || p.research_pathway,
-        willing_summer_courses: savedProfile.willing_summer_courses ?? p.willing_summer_courses,
+        summer_pe: savedProfile.summer_pe ?? (savedProfile.willing_summer_courses ?? p.summer_pe),
+        summer_language: savedProfile.summer_language ?? p.summer_language,
         willing_8th_course: savedProfile.willing_8th_course ?? p.willing_8th_course,
         current_math_level: savedProfile.current_math_level || p.current_math_level,
         completed_courses_by_grade: savedProfile.completed_courses_by_grade || p.completed_courses_by_grade,
@@ -982,7 +1013,8 @@ function StudentPlanner({ onSave, user, savedProfile, onSaveProfile, onSignInPro
         interests: form.interests,
         rigor_preference: form.rigor_preference,
         research_pathway: form.research_pathway,
-        willing_summer_courses: form.willing_summer_courses,
+        summer_pe: form.summer_pe,
+        summer_language: form.summer_language,
         willing_8th_course: form.willing_8th_course,
         current_math_level: form.current_math_level,
         completed_courses_by_grade: form.completed_courses_by_grade,
@@ -1010,7 +1042,8 @@ function StudentPlanner({ onSave, user, savedProfile, onSaveProfile, onSignInPro
       interests: form.interests,
       rigor_preference: form.rigor_preference,
       research_pathway: form.research_pathway,
-      willing_summer_courses: form.willing_summer_courses,
+      summer_pe: form.summer_pe,
+      summer_language: form.summer_language,
       willing_8th_course: form.willing_8th_course,
       current_math_level: form.current_math_level,
       completed_courses_by_grade: form.completed_courses_by_grade,
@@ -1029,7 +1062,7 @@ function StudentPlanner({ onSave, user, savedProfile, onSaveProfile, onSignInPro
       student_name:"Alex Johnson", current_grade:"9", gpa:"4.2",
       interests:["CS / Programming","Research / Lab Science","Engineering / Robotics"],
       rigor_preference:"aggressive", research_pathway:"Computer Science / AI / Systems",
-      willing_summer_courses:true, willing_8th_course:true,
+      summer_pe:true, summer_language:"Spanish I", willing_8th_course:true,
       current_math_level:"3135TM",
       completed_courses_by_grade:{
         9:["113036","431036","441036","730000","3184T1","8403TJ","551000"]
@@ -1071,7 +1104,8 @@ function StudentPlanner({ onSave, user, savedProfile, onSaveProfile, onSignInPro
           current_grade:parseInt(form.current_grade), gpa:parseFloat(form.gpa),
           interests:form.interests, rigor_preference:form.rigor_preference,
           research_pathway:form.research_pathway||null,
-          willing_summer:form.willing_summer_courses, willing_8th_course:form.willing_8th_course,
+          summer_pe:form.summer_pe, summer_language:form.summer_language||"",
+          willing_8th_course:form.willing_8th_course,
           current_math_level:form.current_math_level,
           completed_math_courses:completedMath,
           completed_courses:completedFlat,
@@ -1114,8 +1148,9 @@ function StudentPlanner({ onSave, user, savedProfile, onSaveProfile, onSignInPro
     const payload = {
       student_name:form.student_name||"Anonymous", current_grade:parseInt(form.current_grade),
       gpa:parseFloat(form.gpa), interests:form.interests, rigor_preference:form.rigor_preference,
-      research_pathway:form.research_pathway, willing_summer_courses:form.willing_summer_courses,
-      willing_8th_course:form.willing_8th_course, counselor_notes:form.counselor_notes,
+      research_pathway:form.research_pathway, summer_pe:form.summer_pe,
+      summer_language:form.summer_language, willing_8th_course:form.willing_8th_course,
+      counselor_notes:form.counselor_notes,
       original_generated_schedule:result.schedule, final_schedule:editedSchedule,
       four_year_roadmap:editedRoadmap||result.roadmap, warnings:result.warnings, is_confirmed:true
     };
@@ -1185,6 +1220,7 @@ Student info:
 - Rigor preference: ${form.rigor_preference}
 - World language: ${form.world_language||"None"}
 - Research pathway: ${form.research_pathway||"Undecided"}
+- VVA summer plan: ${form.summer_pe?"PE over summer (freeing a TJ slot)":""}${form.summer_language?`${form.summer_pe?"; ":""}${form.summer_language} via Virtual Virginia over summer`:""||"None"}
 
 TJ-SPECIFIC CONTEXT:
 - TJ students take exactly 7 courses per year (a few opt into an 8th course online)
@@ -1320,15 +1356,54 @@ Only include SCHEDULE_CHANGE if the user explicitly asked to modify the schedule
         </div>
 
         <div style={{ padding:"14px", borderRadius:10, border:`1px solid ${C.border}`, backgroundColor:C.bg }}>
-          <label style={{ ...lbl, marginBottom:4 }}>Supplemental Options <span style={{ fontWeight:400, fontSize:12 }}>(not part of your 7 TJ classes)</span></label>
-          <div style={{ display:"flex", flexDirection:"column", gap:8, marginTop:8 }}>
-            <label style={{ display:"flex", alignItems:"center", gap:8, fontSize:13, cursor:"pointer", color:C.textPrimary }}>
-              <input type="checkbox" checked={form.willing_summer_courses} onChange={e=>set("willing_summer_courses",e.target.checked)} />
-              Open to summer courses (Virtual Fairfax/VA)
+          <label style={{ ...lbl, marginBottom:2 }}>Virtual Virginia Summer Courses
+            <span style={{ fontWeight:400, color:C.textSecondary, marginLeft:6, fontSize:12 }}>(outside your 7 TJ slots)</span>
+          </label>
+          <p style={{ fontSize:11, color:C.textSecondary, margin:"0 0 10px" }}>VVA summer runs June–July (~$375/course; FCPS students may qualify for a discount)</p>
+          <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+            <label style={{ display:"flex", alignItems:"flex-start", gap:8, fontSize:13, cursor:"pointer", color:C.textPrimary }}>
+              <input type="checkbox" style={{ marginTop:2 }} checked={form.summer_pe} onChange={e=>set("summer_pe",e.target.checked)} />
+              <span>
+                <strong>Health &amp; PE {form.current_grade==="9"||form.current_grade==="8"?"9":"10"} over summer</strong>
+                <span style={{ color:C.textSecondary }}> — frees up one TJ slot for an extra elective</span>
+              </span>
             </label>
-            <label style={{ display:"flex", alignItems:"center", gap:8, fontSize:13, cursor:"pointer", color:C.textPrimary }}>
-              <input type="checkbox" checked={form.willing_8th_course} onChange={e=>set("willing_8th_course",e.target.checked)} />
-              Open to an 8th online course during the school year
+            <div>
+              <label style={{ fontSize:13, fontWeight:500, color:C.textPrimary, display:"block", marginBottom:4 }}>World Language via VVA summer</label>
+              <select style={inp} value={form.summer_language} onChange={e=>set("summer_language",e.target.value)}>
+                <option value="">None — I'll start my language at TJ</option>
+                <optgroup label="Spanish">
+                  <option value="Spanish I">Spanish I (beginner)</option>
+                  <option value="Spanish II">Spanish II</option>
+                  <option value="Spanish III">Spanish III</option>
+                  <option value="Spanish IV">Spanish IV</option>
+                </optgroup>
+                <optgroup label="French">
+                  <option value="French I">French I (beginner)</option>
+                  <option value="French II">French II</option>
+                  <option value="French III">French III</option>
+                </optgroup>
+                <optgroup label="German">
+                  <option value="German I">German I (beginner)</option>
+                  <option value="German II">German II</option>
+                  <option value="German III">German III</option>
+                </optgroup>
+                <optgroup label="Latin">
+                  <option value="Latin III">Latin III</option>
+                </optgroup>
+              </select>
+              {form.summer_language && (
+                <p style={{ fontSize:11, color:C.accent, margin:"4px 0 0" }}>
+                  Your TJ schedule will start at the next level after {form.summer_language}.
+                </p>
+              )}
+            </div>
+            <label style={{ display:"flex", alignItems:"flex-start", gap:8, fontSize:13, cursor:"pointer", color:C.textPrimary }}>
+              <input type="checkbox" style={{ marginTop:2 }} checked={form.willing_8th_course} onChange={e=>set("willing_8th_course",e.target.checked)} />
+              <span>
+                <strong>8th online course during the school year</strong>
+                <span style={{ color:C.textSecondary }}> — rare; typically an additional elective via VVA</span>
+              </span>
             </label>
           </div>
         </div>
@@ -1549,6 +1624,37 @@ Only include SCHEDULE_CHANGE if the user explicitly asked to modify the schedule
 
                 {editedSchedule && (
                   <EditableSchedule schedule={editedSchedule} onScheduleChange={handleScheduleEdit} nextGrade={nextGrade} />
+                )}
+
+                {(form.summer_pe || form.summer_language) && (
+                  <div style={{ marginTop:16, padding:"14px 16px", borderRadius:10, backgroundColor:"#F0FDFB", border:`1px solid ${C.accent}` }}>
+                    <p style={{ fontWeight:700, fontSize:13, color:C.accent, margin:"0 0 8px" }}>Virtual Virginia Summer Courses</p>
+                    <p style={{ fontSize:11, color:C.textSecondary, margin:"0 0 8px" }}>These are outside your 7 TJ slots and completed before the school year starts.</p>
+                    <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+                      {form.summer_pe && (
+                        <div style={{ display:"flex", alignItems:"center", gap:8, fontSize:13 }}>
+                          <span style={{ padding:"2px 8px", borderRadius:6, backgroundColor:"#DCFCE7", color:"#166534", fontWeight:600, fontSize:11 }}>VVA Summer</span>
+                          <span style={{ color:C.textPrimary }}>Health &amp; PE {nextGrade===9?"9":"10"}</span>
+                          <span style={{ color:C.textSecondary, fontSize:12 }}>— satisfies graduation PE requirement; frees one TJ slot</span>
+                        </div>
+                      )}
+                      {form.summer_language && (
+                        <div style={{ display:"flex", alignItems:"center", gap:8, fontSize:13 }}>
+                          <span style={{ padding:"2px 8px", borderRadius:6, backgroundColor:"#DCFCE7", color:"#166534", fontWeight:600, fontSize:11 }}>VVA Summer</span>
+                          <span style={{ color:C.textPrimary }}>{form.summer_language}</span>
+                          <span style={{ color:C.textSecondary, fontSize:12 }}>
+                            — your TJ schedule starts at {(() => {
+                              const v = VVA_SUMMER_LANGUAGES.find(c=>c.value===form.summer_language);
+                              return v ? `${v.lang} ${v.level+1}` : "the next level";
+                            })()}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                    <p style={{ fontSize:11, color:C.textSecondary, margin:"8px 0 0" }}>
+                      Cohort 1: Jun 2–Jul 10 &nbsp;·&nbsp; Cohort 2: Jun 16–Jul 24 &nbsp;·&nbsp; <a href="https://virtualvirginia.org/summer/" target="_blank" rel="noreferrer" style={{ color:C.accent }}>virtualvirginia.org/summer</a>
+                    </p>
+                  </div>
                 )}
 
                 <div style={{ marginTop:20, paddingTop:16, borderTop:`1px solid ${C.border}` }}>
