@@ -10,7 +10,7 @@ const C = {
 // ⚠️ Replace with your Anthropic API key
 const ANTHROPIC_API_KEY = "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";
 
-const BACKEND_URL = "http://localhost:3001"; // Change to your deployed server URL after deploying
+const BACKEND_URL = ""; // API routes served by Vercel at /api/*
 
 // ── Supabase Auth ─────────────────────────────────────────────────────────────
 const SUPABASE_URL = "https://iuuzivnczywzqyuheaha.supabase.co";
