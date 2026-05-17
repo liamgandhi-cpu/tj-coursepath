@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect, useCallback } from "react";
+import { createClient } from "@supabase/supabase-js";
 
 const C = {
   primary:"#0F2A44", secondary:"#2F6F9F", accent:"#2EC4B6",
@@ -12,64 +13,55 @@ const ANTHROPIC_API_KEY = "sk-ant-api03-mXrg9grimgLRH_duGZQrcIfBV1ABngV1RZXYjpGA
 
 const BACKEND_URL = ""; // API routes served by Vercel at /api/*
 
-// ── Supabase Auth ─────────────────────────────────────────────────────────────
+// ── Supabase client ───────────────────────────────────────────────────────────
 const SUPABASE_URL = "https://iuuzivnczywzqyuheaha.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Iml1dXppdm5jenl3enF5dWhlYWhhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI4MzY0MDIsImV4cCI6MjA4ODQxMjQwMn0.R7fXxNvAAIHv9yIpKp3Ut9cxM5OFHgoLPQ5refx_EH4";
-
-async function sbFetch(path, opts={}) {
-  const session = JSON.parse(localStorage.getItem("sb_session") || "null");
-  const headers = { "Content-Type": "application/json", "apikey": SUPABASE_ANON_KEY, ...opts.headers };
-  if (session?.access_token) headers["Authorization"] = "Bearer " + session.access_token;
-  const res = await fetch(SUPABASE_URL + path, { ...opts, headers });
-  return res.json();
-}
+const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 async function signUp(email, password) {
-  return sbFetch("/auth/v1/signup", { method:"POST", body: JSON.stringify({ email, password }) });
+  const { data, error } = await supabase.auth.signUp({ email, password });
+  if (error) return { error };
+  return data;
 }
 
 async function signIn(email, password) {
-  const data = await sbFetch("/auth/v1/token?grant_type=password", { method:"POST", body: JSON.stringify({ email, password }) });
-  if (data.access_token) localStorage.setItem("sb_session", JSON.stringify(data));
+  const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+  if (error) return { error };
   return data;
 }
 
 async function signInWithGoogle() {
-  window.location.href = SUPABASE_URL + "/auth/v1/authorize?provider=google&redirect_to=" + encodeURIComponent(window.location.origin);
+  await supabase.auth.signInWithOAuth({
+    provider: "google",
+    options: { redirectTo: window.location.origin },
+  });
 }
 
-function signOut() {
-  localStorage.removeItem("sb_session");
-  localStorage.removeItem("sb_profile");
-}
-
-function getSession() {
-  return JSON.parse(localStorage.getItem("sb_session") || "null");
+async function signOut() {
+  await supabase.auth.signOut();
 }
 
 async function saveProfile(data) {
-  const session = getSession();
+  const { data: { session } } = await supabase.auth.getSession();
   if (!session) return;
-  // user id can be at session.user.id or session.user.sub depending on auth flow
-  const userId = session.user?.id || session.user?.sub;
-  if (!userId) { console.error("No user ID in session:", session); return; }
-  const result = await sbFetch("/rest/v1/profiles?on_conflict=user_id", {
-    method: "POST",
-    headers: { "Prefer": "resolution=merge-duplicates" },
-    body: JSON.stringify({ user_id: userId, ...data, updated_at: new Date().toISOString() })
-  });
-  console.log("Save result:", result);
+  const userId = session.user.id;
+  const { data: result, error } = await supabase
+    .from("profiles")
+    .upsert({ user_id: userId, ...data, updated_at: new Date().toISOString() }, { onConflict: "user_id" });
+  if (error) console.error("Save error:", error);
   return result;
 }
 
 async function loadProfile() {
-  const session = getSession();
+  const { data: { session } } = await supabase.auth.getSession();
   if (!session) return null;
-  const userId = session.user?.id || session.user?.sub;
-  if (!userId) return null;
-  const data = await sbFetch("/rest/v1/profiles?user_id=eq." + userId + "&select=*");
-  console.log("Load profile result:", data);
-  return Array.isArray(data) ? data[0] : null;
+  const { data, error } = await supabase
+    .from("profiles")
+    .select("*")
+    .eq("user_id", session.user.id)
+    .single();
+  if (error && error.code !== "PGRST116") console.error("Load error:", error);
+  return data || null;
 }
 
 // semester_pair indicates which courses are recommended to be taken together as semester pairs
@@ -1908,11 +1900,11 @@ function AuthModal({ onAuth }) {
     try {
       if (mode === "signup") {
         const data = await signUp(email, password);
-        if (data.error) { setError(data.error.message || "Sign up failed"); }
+        if (data?.error) { setError(data.error.message || "Sign up failed"); }
         else { setMsg("Check your email to confirm your account, then sign in."); setMode("signin"); }
       } else {
         const data = await signIn(email, password);
-        if (data.error) { setError(data.error.message || "Sign in failed"); }
+        if (data?.error) { setError(data.error.message || "Sign in failed"); }
         else { onAuth(data); }
       }
     } catch(e) { setError("Something went wrong. Try again."); }
@@ -1981,29 +1973,21 @@ export default function App() {
   const [savedProfile, setSavedProfile] = useState(null);
   const [saveStatus, setSaveStatusRoot] = useState(null); // "saving" | "saved" | "error"
 
-  // Check for existing session on load + handle Google OAuth redirect
+  // Session management via Supabase SDK (handles PKCE + hash + refresh automatically)
   useEffect(() => {
-    // Handle Google OAuth redirect (hash fragment has access_token)
-    const hash = window.location.hash;
-    if (hash.includes("access_token")) {
-      const params = new URLSearchParams(hash.slice(1));
-      const session = {
-        access_token: params.get("access_token"),
-        refresh_token: params.get("refresh_token"),
-        user: { id: params.get("user_id") }
-      };
-      // Fetch user info
-      sbFetch("/auth/v1/user", { headers: { Authorization: "Bearer " + session.access_token } })
-        .then(u => {
-          session.user = u;
-          localStorage.setItem("sb_session", JSON.stringify(session));
-          setUser(u);
-          window.history.replaceState({}, "", window.location.pathname);
-        });
-    } else {
-      const session = getSession();
+    supabase.auth.getSession().then(({ data: { session } }) => {
       if (session?.user) setUser(session.user);
-    }
+    });
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (session?.user) {
+        setUser(session.user);
+        setShowAuth(false);
+        setProfileLoaded(false);
+      } else {
+        setUser(null);
+      }
+    });
+    return () => subscription.unsubscribe();
   }, []);
 
   // Load profile when user is set
@@ -2016,14 +2000,15 @@ export default function App() {
     }
   }, [user, profileLoaded]);
 
-  const handleAuth = (session) => {
-    setUser(session.user);
+  const handleAuth = (sessionData) => {
+    // onAuthStateChange handles setting user; just close the modal
     setShowAuth(false);
-    setProfileLoaded(false); // trigger load
+    setProfileLoaded(false);
+    if (sessionData?.user) setUser(sessionData.user);
   };
 
-  const handleSignOut = () => {
-    signOut();
+  const handleSignOut = async () => {
+    await signOut();
     setUser(null);
     setSavedProfile(null);
     setProfileLoaded(false);
