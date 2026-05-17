@@ -301,6 +301,7 @@ const TJ_COURSES = [
   { course_code:"630604", course_name:"AP Cybersecurity", subject_area:"General", level_tags:["AP"], min_grade:10, max_grade:12, prerequisites:[], requirement_bucket:"General Elective", duration:"year" },
   { course_code:"982014", course_name:"AP Research", subject_area:"General", level_tags:["AP"], min_grade:11, max_grade:12, prerequisites:[], requirement_bucket:"General Elective", duration:"year" },
   { course_code:"612097", course_name:"Economics & Personal Finance HN", subject_area:"General", level_tags:["HN"], min_grade:10, max_grade:12, prerequisites:[], requirement_bucket:"General Elective", duration:"year" },
+  { course_code:"FREEPERIOD", course_name:"Free Period / Independent Study", subject_area:"General", level_tags:[], min_grade:9, max_grade:12, prerequisites:[], requirement_bucket:"General Elective", duration:"year" },
 ];
 
 const getCourseByCode = (code) => TJ_COURSES.find(c => c.course_code === code);
@@ -432,12 +433,10 @@ function getEnglishCourse(grade, rigor) {
 
 function getSocialStudiesCourse(grade, rigor, interests=[]) {
   if (grade===9) {
-    // World History I satisfier — only recommended when no world language fills the 7th slot
-    if (rigor==="aggressive") return getCourseByCode("221204"); // AP Human Geography
-    const stemInterested = interests.some(i=>i.includes("Research")||i.includes("CS")||i.includes("Engineering")||i.includes("Biology"));
-    return stemInterested ? getCourseByCode("2996T1") // History of Science TJ HN
-                          : getCourseByCode("2219T1"); // Ancient & Classical Civilizations TJ HN
+    // AP Human Geography is the dominant World History I credit at TJ (4 history credits required for graduation)
+    return getCourseByCode("221204");
   }
+  // Grade 10: stand-alone fallback only — paired AP Seminar + AP World is handled directly in generateSchedule
   if (grade===10) return rigor==="aggressive" ? getCourseByCode("234004") : getCourseByCode("222136");
   if (grade===11) return rigor==="aggressive" ? getCourseByCode("231904") : getCourseByCode("236036");
   if (grade===12) return rigor==="aggressive" ? getCourseByCode("244504") : getCourseByCode("244036");
@@ -472,69 +471,110 @@ function selectElectives(grade, interests, rigor, current, count, researchPathwa
 function generateSchedule(inputs) {
   const { current_grade, interests, rigor_preference, current_math_level, current_science_level,
     world_language, world_language_level, research_pathway, completed_math_courses=[],
-    completed_courses=[], summer_pe=false, summer_language="" } = inputs;
+    completed_courses=[], summer_pe=false, summer_language="", preferred_elective="" } = inputs;
   const nextGrade = current_grade + 1;
   const warnings = [], schedule = [];
   if (nextGrade > 12) return { schedule:[], warnings:["Cannot generate post-graduation schedule"] };
 
-  // If a VVA summer language is planned, treat it as already completed when building TJ schedule
+  // VVA summer language: treat as already completed
   const vvaLang = VVA_SUMMER_LANGUAGES.find(c => c.value === summer_language);
   const effectiveLang = vvaLang ? vvaLang.lang : (world_language || null);
   const effectiveLangLevel = vvaLang ? vvaLang.level : (world_language_level || 0);
 
-  const eng = getEnglishCourse(nextGrade, rigor_preference);
-  if (eng) schedule.push({ ...eng, reason:`Required English for grade ${nextGrade}` });
+  // ── English + Social Studies ──────────────────────────────────────────────────
+  if (nextGrade === 10) {
+    // AP Seminar + AP World (paired) is the dominant sophomore humanities path at TJ
+    const apSem = getCourseByCode("982003");
+    const apWorld = getCourseByCode("234003");
+    if (apSem) schedule.push({...apSem, reason:"AP Seminar (paired with AP World — standard TJ sophomore humanities track)"});
+    if (apWorld) schedule.push({...apWorld, reason:"AP World History (paired with AP Seminar — standard TJ sophomore humanities track)"});
+    // Fallback if codes missing
+    if (!apSem) { const eng = getEnglishCourse(10, rigor_preference); if(eng) schedule.push({...eng, reason:"Required English for grade 10"}); }
+    if (!apWorld) { const ss = getSocialStudiesCourse(10, rigor_preference, interests); if(ss) schedule.push({...ss, reason:"Required social studies for grade 10"}); }
+  } else if (nextGrade === 11) {
+    // AP US History (paired with AP Eng Lang) is common for junior year
+    const apush = getCourseByCode("231905");
+    const apEngLang = getCourseByCode("119662");
+    if (rigor_preference === "aggressive" && apush && apEngLang) {
+      schedule.push({...apEngLang, reason:"AP English Language (paired with APUSH — common junior humanities pair)"});
+      schedule.push({...apush, reason:"AP US History (paired with AP Eng Lang — common junior humanities pair)"});
+    } else {
+      const eng = getEnglishCourse(11, rigor_preference); if(eng) schedule.push({...eng, reason:"Required English for grade 11"});
+      const ss = getSocialStudiesCourse(11, rigor_preference, interests); if(ss) schedule.push({...ss, reason:"Required: US/VA History"});
+    }
+  } else if (nextGrade === 12) {
+    // AP US Gov (paired with AP Eng Lit) is common for senior year
+    const apGov = getCourseByCode("244506");
+    const apEngLit = getCourseByCode("119505");
+    if (rigor_preference === "aggressive" && apGov && apEngLit) {
+      schedule.push({...apEngLit, reason:"AP English Literature (paired with AP Gov — common senior humanities pair)"});
+      schedule.push({...apGov, reason:"AP US Government (paired with AP Eng Lit — common senior humanities pair)"});
+    } else {
+      const eng = getEnglishCourse(12, rigor_preference); if(eng) schedule.push({...eng, reason:"Required English for grade 12"});
+      const ss = getSocialStudiesCourse(12, rigor_preference, interests); if(ss) schedule.push({...ss, reason:"Required: US/VA Government"});
+    }
+  } else {
+    const eng = getEnglishCourse(nextGrade, rigor_preference);
+    if (eng) schedule.push({...eng, reason:`Required English for grade ${nextGrade}`});
+  }
 
+  // ── Math ──────────────────────────────────────────────────────────────────────
   const math = getNextMathCourse(current_math_level, completed_math_courses, rigor_preference);
   if (math) schedule.push(math);
   else warnings.push("Could not determine next math course — check your math level");
 
+  // ── Science ───────────────────────────────────────────────────────────────────
   const sci = getNextScienceCourse(getScienceLevel(current_science_level), nextGrade, interests, rigor_preference);
-  if (sci) schedule.push({ ...sci, reason:`Science progression for grade ${nextGrade}` });
+  if (sci) schedule.push({...sci, reason:`Science progression for grade ${nextGrade}`});
 
-  if (nextGrade >= 10) {
-    const ss = getSocialStudiesCourse(nextGrade, rigor_preference, interests);
-    if (ss) schedule.push({ ...ss, reason:`Required social studies for grade ${nextGrade}` });
-  }
-
+  // ── Required TJ courses by grade ──────────────────────────────────────────────
   if (nextGrade===9) {
     const cs = getCourseByCode("3184T1"); if(cs) schedule.push({...cs,reason:"TJ required for freshmen"});
     const te = getCourseByCode("8403TJ"); if(te) schedule.push({...te,reason:"TJ required for freshmen"});
     if (!summer_pe) {
       const pe = getCourseByCode("730000"); if(pe) schedule.push({...pe,reason:"Required: Health & PE 9"});
     } else {
-      warnings.push("Health & PE 9 will be completed over summer via Virtual Virginia — extra TJ slot available for an elective.");
+      warnings.push("Health & PE 9 completed over summer via Virtual Virginia — extra TJ slot available.");
     }
   } else if (nextGrade===10) {
     const cs = getCourseByCode("318561"); if(cs) schedule.push({...cs,reason:"TJ required for sophomores"});
     if (!summer_pe) {
       const pe = getCourseByCode("740500"); if(pe) schedule.push({...pe,reason:"Required: Health & PE 10"});
     } else {
-      warnings.push("Health & PE 10 will be completed over summer via Virtual Virginia — extra TJ slot available for an elective.");
+      warnings.push("Health & PE 10 completed over summer via Virtual Virginia — extra TJ slot available.");
     }
   }
 
+  // ── World Language ────────────────────────────────────────────────────────────
   if (effectiveLang) {
     const lang = getNextLanguageCourse(effectiveLang, effectiveLangLevel);
     if (lang) {
       const reason = vvaLang
         ? `Starting ${effectiveLang} ${effectiveLangLevel+1} at TJ (completed ${vvaLang.value} via VVA over summer)`
         : `Continuing ${effectiveLang} level ${effectiveLangLevel+1}`;
-      schedule.push({ ...lang, reason });
+      schedule.push({...lang, reason});
     } else warnings.push(`Could not find next ${effectiveLang} level`);
   }
 
-  // For freshmen without a world language (and not taking one via VVA), fill the open slot
-  if (nextGrade===9 && !effectiveLang && schedule.length < 7) {
-    const ss = getSocialStudiesCourse(9, rigor_preference, interests);
-    if (ss) schedule.push({ ...ss, reason:"Recommended: World History I elective (satisfies future graduation requirement)" });
+  // ── AP Human Geography (grade 9) — World History I credit ────────────────────
+  // Fits when PE is done over summer (freeing a slot) or when there's no world language
+  if (nextGrade===9 && schedule.length < 7 && !schedule.find(c=>c.course_code==="221204")) {
+    const apHug = getCourseByCode("221204");
+    if (apHug) schedule.push({...apHug, reason:"AP Human Geography — satisfies World History I; TJ students need 4 history credits to graduate"});
   }
 
+  // ── Preferred Elective ────────────────────────────────────────────────────────
+  if (preferred_elective && schedule.length < 7 && !schedule.find(c=>c.course_code===preferred_elective)) {
+    const pref = getCourseByCode(preferred_elective);
+    if (pref) schedule.push({...pref, reason:"Your selected elective / free period"});
+  }
+
+  // ── AI-selected electives to fill remaining slots ─────────────────────────────
   if (schedule.length < 7) {
     const usedCodes = new Set([...completed_courses.map(c=>c.course_code), ...schedule.map(c=>c.course_code)]);
     const electives = selectElectives(nextGrade, interests, rigor_preference, schedule, 7-schedule.length, research_pathway)
-      .filter(c=>!usedCodes.has(c.course_code));
-    electives.forEach(c=>schedule.push({ ...c, reason:"Elective matching your interests" }));
+      .filter(c=>!usedCodes.has(c.course_code) && c.course_code !== "FREEPERIOD");
+    electives.forEach(c=>schedule.push({...c, reason:"Elective matching your interests"}));
   }
 
   const final = schedule.slice(0,7);
@@ -955,7 +995,7 @@ function AdminDashboard({ submissions }) {
 function StudentPlanner({ onSave, user, savedProfile, onSaveProfile, onSignInPrompt }) {
   const [form, setForm] = useState({
     student_name:"", current_grade:"", gpa:"", interests:[], rigor_preference:"",
-    research_pathway:"", summer_pe:false, summer_language:"", willing_8th_course:false,
+    research_pathway:"", summer_pe:false, summer_language:"", willing_8th_course:false, preferred_elective:"",
     current_math_level:"", completed_courses_by_grade:{},
     current_science_level:"", world_language:"", world_language_level:"", counselor_notes:""
   });
@@ -989,6 +1029,7 @@ function StudentPlanner({ onSave, user, savedProfile, onSaveProfile, onSignInPro
         summer_pe: savedProfile.summer_pe ?? (savedProfile.willing_summer_courses ?? p.summer_pe),
         summer_language: savedProfile.summer_language ?? p.summer_language,
         willing_8th_course: savedProfile.willing_8th_course ?? p.willing_8th_course,
+        preferred_elective: savedProfile.preferred_elective ?? p.preferred_elective,
         current_math_level: savedProfile.current_math_level || p.current_math_level,
         completed_courses_by_grade: savedProfile.completed_courses_by_grade || p.completed_courses_by_grade,
         current_science_level: savedProfile.current_science_level || p.current_science_level,
@@ -1016,6 +1057,7 @@ function StudentPlanner({ onSave, user, savedProfile, onSaveProfile, onSignInPro
         summer_pe: form.summer_pe,
         summer_language: form.summer_language,
         willing_8th_course: form.willing_8th_course,
+        preferred_elective: form.preferred_elective,
         current_math_level: form.current_math_level,
         completed_courses_by_grade: form.completed_courses_by_grade,
         current_science_level: form.current_science_level,
@@ -1106,6 +1148,7 @@ function StudentPlanner({ onSave, user, savedProfile, onSaveProfile, onSignInPro
           research_pathway:form.research_pathway||null,
           summer_pe:form.summer_pe, summer_language:form.summer_language||"",
           willing_8th_course:form.willing_8th_course,
+          preferred_elective:form.preferred_elective||"",
           current_math_level:form.current_math_level,
           completed_math_courses:completedMath,
           completed_courses:completedFlat,
@@ -1353,6 +1396,43 @@ Only include SCHEDULE_CHANGE if the user explicitly asked to modify the schedule
             <option value="">Select research area</option>
             {RESEARCH_PATHWAYS.map(p=><option key={p} value={p}>{p}</option>)}
           </select>
+        </div>
+
+        <div>
+          <label style={lbl}>Elective / Free Period
+            <span style={{ fontWeight:400, color:C.textSecondary, marginLeft:6, fontSize:12 }}>(your open slot — AI fills it if left blank)</span>
+          </label>
+          <select style={inp} value={form.preferred_elective} onChange={e=>set("preferred_elective",e.target.value)}>
+            <option value="">Let AI choose based on my interests</option>
+            <optgroup label="AP Courses">
+              <option value="613504">AP Business</option>
+              <option value="290204">AP Psychology</option>
+              <option value="922604">AP Music Theory</option>
+              <option value="630604">AP Cybersecurity</option>
+            </optgroup>
+            <optgroup label="Music / Performing Arts">
+              <option value="9239TK">Advanced Orchestra HN – Violin</option>
+              <option value="923915">Advanced Orchestra HN – Viola</option>
+              <option value="923916">Advanced Orchestra HN – Cello</option>
+              <option value="923917">Advanced Orchestra HN – Bass</option>
+              <option value="9234TL">Advanced Band HN – Wind Ensemble</option>
+              <option value="9234TK">Advanced Band HN – Percussion</option>
+              <option value="9289TL">Advanced Chorus HN</option>
+            </optgroup>
+            <optgroup label="Visual Arts &amp; Theatre">
+              <option value="912032">Studio Art &amp; Design 1</option>
+              <option value="918012">Digital Art 1</option>
+              <option value="919332">Photography 1</option>
+              <option value="143000">Theatre Arts TJ HN</option>
+            </optgroup>
+            <optgroup label="Other">
+              <option value="612097">Economics &amp; Personal Finance HN</option>
+              <option value="FREEPERIOD">Free Period / Independent Study</option>
+            </optgroup>
+          </select>
+          {form.preferred_elective === "FREEPERIOD" && (
+            <p style={{ fontSize:11, color:C.textSecondary, margin:"4px 0 0" }}>A free period will be held as an open slot — you can swap it for any course in the editable schedule.</p>
+          )}
         </div>
 
         <div style={{ padding:"14px", borderRadius:10, border:`1px solid ${C.border}`, backgroundColor:C.bg }}>
